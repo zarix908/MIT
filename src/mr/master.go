@@ -1,29 +1,53 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
+import ( 
+	"log"
+	"net"
+	"os"
+	"net/rpc"
+	"net/http"
+	"fmt"
+)
 
-
-type Master struct {
-	// Your definitions here.
-
+type taskInfo struct {
+	filenames []string
+	kind TaskKind
 }
 
-// Your code here -- RPC handlers for the worker to call.
+type Master struct {
+	tasksInfo map[TaskId]taskInfo
+	mapChan chan TaskId
+	reducersCount int
+}
 
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+func (m *Master) newMapTask(id TaskId, filenames []string) {
+	m.tasksInfo[id] = taskInfo{filenames, MAP}
+	m.mapChan <- id
+}
+
+func (m *Master) GetTask(arg int, task *Task) error {
+	task.Id = <- m.mapChan
+	info := m.tasksInfo[task.Id]
+	task.Filenames = info.filenames
+	task.Kind = info.kind
+	task.ReducersCount = m.reducersCount
 	return nil
 }
 
+func (m *Master) ReportAboutTaskFail(id TaskId, reply *Reply) error {
+	m.mapChan <- id
+	reply.Ok = true
+	return nil
+}
+
+func (m *Master) ReportAboutMapTaskComplete(
+	request *CompleteMapTaskRequest,
+	reply *Reply,
+) error {
+	fmt.Printf("Task with id %v complete. Filenames: %v\n", request.Id, request.Filenames)
+	reply.Ok = true
+	return nil
+}
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -60,10 +84,11 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{}
+	m := Master{make(map[TaskId]taskInfo), make(chan TaskId, 30), nReduce}
 
-	// Your code here.
-
+	for i, filename := range(files) {
+		m.newMapTask(TaskId(i), []string{filename})
+	}
 
 	m.server()
 	return &m

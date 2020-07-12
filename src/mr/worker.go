@@ -1,9 +1,14 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"fmt"
+	"log"
+	"net/rpc"
+	"hash/fnv"
+	"encoding/json"
+	"os"
+	"io/ioutil"
+)
 
 
 //
@@ -30,12 +35,20 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	for {
+		task := tryGetTaskFromMaster()
+		
+		if (task.Kind == MAP) {
+			outputFilenames, err := execMap(mapf, task)
 
-	// Your worker implementation here.
+			if (err != nil) {
+				log.Fatal(err)
+				reportAboutTaskFail(task.Id)
+			}
 
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
-
+			reportAboutMapTaskComplete(task.Id, outputFilenames)
+		}
+	}	
 }
 
 //
@@ -43,22 +56,38 @@ func Worker(mapf func(string, string) []KeyValue,
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func CallExample() {
+func tryGetTaskFromMaster() Task {
+	log.Println("Getting task")
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+	task := Task{}
+	if call("Master.GetTask", 0, &task) {
+		return task
+	} 
 
-	// fill in the argument(s).
-	args.X = 99
+	log.Println("Exit because master exit")
+	os.Exit(0)
+	return Task{}
+}
 
-	// declare a reply structure.
-	reply := ExampleReply{}
+func reportAboutTaskFail(id TaskId) {
+	log.Println("Reporting about task fail")
+	
+	reply := Reply{false}
+	if !call("Master.ReportAboutTaskFail", id, &reply) {
+		log.Println("Exit because master exit")
+		os.Exit(0)
+	}
+}
 
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
+func reportAboutMapTaskComplete(id TaskId, filenames []string) {
+	log.Println("Reporting about task complete")
 
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	reply := Reply{false}
+	request := CompleteMapTaskRequest{id, filenames}
+	if !call("Master.ReportAboutMapTaskComplete", &request, &reply) {
+		log.Println("Exit because master exit")
+		os.Exit(0)
+	}
 }
 
 //
@@ -83,3 +112,65 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	fmt.Println(err)
 	return false
 }
+
+func execMap(
+	mapf func(string, string) []KeyValue,
+	task Task,
+) ([]string, error) {
+	KVPairs := []KeyValue{}
+
+	for _, filename := range(task.Filenames) {
+		file, openErr := os.Open(filename)
+		if openErr != nil {
+			return nil, openErr
+		}
+
+		content, readErr := ioutil.ReadAll(file)
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		file.Close()
+		mappedKVPairs := mapf(filename, string(content))
+		KVPairs = append(KVPairs, mappedKVPairs...)
+	}
+
+	outputFilenames := []string{}
+	parts := splitToPartsByKeyHash(KVPairs, task.ReducersCount)
+	for keyHash, pairs := range(parts) {
+		filename := fmt.Sprintf("mr-%v-%v", task.Id, keyHash)
+		outputFilenames = append(outputFilenames, filename)
+		file, createErr := os.Create(filename)
+		if createErr != nil {
+			return nil, createErr
+		}
+
+		jsonPairs, serializeErr := json.Marshal(pairs)
+		if serializeErr != nil {
+			return nil, serializeErr
+		}
+
+		_, writeErr := file.Write(jsonPairs)
+		if writeErr != nil {
+			return nil, writeErr
+		}
+	}
+
+	return outputFilenames, nil
+}
+
+func splitToPartsByKeyHash(
+	KVPairs []KeyValue, 
+	reducersCount int,
+) (map[int][]KeyValue) {
+	parts := make(map[int][]KeyValue)
+
+	for _, pair := range(KVPairs) {
+		keyHash := ihash(pair.Key) % reducersCount
+		part := parts[keyHash]
+		part = append(part, pair)
+		parts[keyHash] = part
+	}
+
+	return parts
+} 
