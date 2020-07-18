@@ -79,7 +79,7 @@ func reportAboutTaskFail(id TaskId) {
 	}
 }
 
-func reportAboutMapTaskComplete(id TaskId, filenames []string) {
+func reportAboutMapTaskComplete(id TaskId, filenames map[int][]string) {
 	log.Println("Reporting about task complete")
 
 	reply := Reply{false}
@@ -116,7 +116,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 func execMap(
 	mapf func(string, string) []KeyValue,
 	task Task,
-) ([]string, error) {
+) (map[int][]string, error) {
 	KVPairs := []KeyValue{}
 
 	for _, filename := range(task.Filenames) {
@@ -135,11 +135,14 @@ func execMap(
 		KVPairs = append(KVPairs, mappedKVPairs...)
 	}
 
-	outputFilenames := []string{}
+	outputFilenames := make(map[int][]string)
 	parts := splitToPartsByKeyHash(KVPairs, task.ReducersCount)
 	for keyHash, pairs := range(parts) {
 		filename := fmt.Sprintf("mr-%v-%v", task.Id, keyHash)
-		outputFilenames = append(outputFilenames, filename)
+		filenames := outputFilenames[keyHash]
+		filenames = append(filenames, filename)
+		outputFilenames[keyHash] = filenames
+
 		file, createErr := os.Create(filename)
 		if createErr != nil {
 			return nil, createErr

@@ -32,7 +32,7 @@ type Task struct {
 
 type CompleteMapTaskRequest struct {
 	Id TaskId
-	Filenames []string
+	Filenames map[int][]string
 }
 
 type Reply struct {
