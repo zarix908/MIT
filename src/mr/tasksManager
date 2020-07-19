@@ -1,0 +1,12 @@
+// type tasksManager struct {
+// 	tasks map[TaskId]Task
+// }
+
+// func (manager *tasksManager) newTask(
+// 	id TaskId, 
+// 	filenames []string,
+// 	kind TaskKind,
+// ) {
+	
+// }
+

@@ -35,11 +35,13 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	reducersCount := getReducersCount()
+
 	for {
 		task := tryGetTaskFromMaster()
 		
 		if (task.Kind == MAP) {
-			outputFilenames, err := execMap(mapf, task)
+			outputFilenames, err := execMap(mapf, task, reducersCount)
 
 			if (err != nil) {
 				log.Fatal(err)
@@ -56,6 +58,18 @@ func Worker(mapf func(string, string) []KeyValue,
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
+func getReducersCount() int {
+	log.Println("Getting reducers count")
+	
+	response := ReducersCountResponse{}
+	if !call("Master.GetReducersCount", 0, &response) {
+		log.Println("Exit because master exit")
+		os.Exit(0)
+	}
+
+	return response.ReducersCount
+}
+
 func tryGetTaskFromMaster() Task {
 	log.Println("Getting task")
 
@@ -79,7 +93,7 @@ func reportAboutTaskFail(id TaskId) {
 	}
 }
 
-func reportAboutMapTaskComplete(id TaskId, filenames map[int][]string) {
+func reportAboutMapTaskComplete(id TaskId, filenames map[TaskId]string) {
 	log.Println("Reporting about task complete")
 
 	reply := Reply{false}
@@ -116,7 +130,8 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 func execMap(
 	mapf func(string, string) []KeyValue,
 	task Task,
-) (map[int][]string, error) {
+	reducersCount int,
+) (map[TaskId]string, error) {
 	KVPairs := []KeyValue{}
 
 	for _, filename := range(task.Filenames) {
@@ -135,13 +150,11 @@ func execMap(
 		KVPairs = append(KVPairs, mappedKVPairs...)
 	}
 
-	outputFilenames := make(map[int][]string)
-	parts := splitToPartsByKeyHash(KVPairs, task.ReducersCount)
+	outputFilenames := make(map[TaskId]string)
+	parts := splitToPartsByKeyHash(KVPairs, reducersCount)
 	for keyHash, pairs := range(parts) {
 		filename := fmt.Sprintf("mr-%v-%v", task.Id, keyHash)
-		filenames := outputFilenames[keyHash]
-		filenames = append(filenames, filename)
-		outputFilenames[keyHash] = filenames
+		outputFilenames[TaskId(keyHash)] = filename
 
 		file, createErr := os.Create(filename)
 		if createErr != nil {

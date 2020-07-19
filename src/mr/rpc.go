@@ -27,12 +27,15 @@ type Task struct {
 	Id TaskId
 	Filenames []string
 	Kind TaskKind
+}
+
+type ReducersCountResponse struct {
 	ReducersCount int
 }
 
 type CompleteMapTaskRequest struct {
 	Id TaskId
-	Filenames map[int][]string
+	Filenames map[TaskId]string
 }
 
 type Reply struct {

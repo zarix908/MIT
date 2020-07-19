@@ -6,7 +6,7 @@ import (
 	"os"
 	"net/rpc"
 	"net/http"
-	"fmt"
+	"./snapstruct"
 )
 
 type taskInfo struct {
@@ -15,6 +15,8 @@ type taskInfo struct {
 }
 
 type Master struct {
+	intermediateFilenames *snapstruct.Map
+	mapTasksCount int
 	tasksInfo map[TaskId]taskInfo
 	mapChan chan TaskId
 	reducersCount int
@@ -25,12 +27,39 @@ func (m *Master) newMapTask(id TaskId, filenames []string) {
 	m.mapChan <- id
 }
 
+// func (m *Master) createReduceTasks() {
+// 	var filenames map[TaskId][]string
+
+// 	snapshot := m.intermediateFilenames.Snapshot()
+// 	switch fs := snapshot.(type) {
+// 		case (map[TaskId][]string):
+// 			filenames = fs
+// 		default:
+// 			panic("filenames should have  type")
+// 	}
+
+// 	for id, filename := range filenames {
+// 		info := m.tasksInfo[id]
+// 		info.filenames = append(info.filenames, filename)
+// 		info.kind = REDUCE
+// 	}
+
+// 	log.Printf(m.tasksInfo)
+// }
+
+func (m *Master) GetReducersCount(
+	arg int, 
+	response *ReducersCountResponse,
+) error {
+	response.ReducersCount = m.reducersCount
+	return nil
+}
+
 func (m *Master) GetTask(arg int, task *Task) error {
 	task.Id = <- m.mapChan
 	info := m.tasksInfo[task.Id]
 	task.Filenames = info.filenames
 	task.Kind = info.kind
-	task.ReducersCount = m.reducersCount
 	return nil
 }
 
@@ -44,7 +73,8 @@ func (m *Master) ReportAboutMapTaskComplete(
 	request *CompleteMapTaskRequest,
 	reply *Reply,
 ) error {
-	fmt.Printf("Task with id %v complete. Filenames: %v\n", request.Id, request.Filenames)
+	log.Printf("Task with id %v complete. Filenames: %v\n", request.Id, request.Filenames)
+	m.intermediateFilenames.Set(request.Id, request.Filenames)
 	reply.Ok = true
 	return nil
 }
@@ -84,7 +114,12 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{make(map[TaskId]taskInfo), make(chan TaskId, 30), nReduce}
+	m := Master{
+		snapstruct.NewMap(), 0,
+		make(map[TaskId]taskInfo),
+		make(chan TaskId, 30),
+		nReduce,
+	}
 
 	for i, filename := range(files) {
 		m.newMapTask(TaskId(i), []string{filename})
