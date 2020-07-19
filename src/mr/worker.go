@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"io/ioutil"
+	"sort"
 )
 
 
@@ -18,6 +19,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -40,15 +49,27 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		task := tryGetTaskFromMaster()
 		
-		if (task.Kind == MAP) {
+		switch task.Kind {
+		case MAP:
 			outputFilenames, err := execMap(mapf, task, reducersCount)
 
 			if (err != nil) {
-				log.Fatal(err)
+				// log.Printf("Task fail: %v\n", err)
 				reportAboutTaskFail(task.Id)
+				continue
 			}
 
 			reportAboutMapTaskComplete(task.Id, outputFilenames)
+		case REDUCE:
+			err := execReduce(reducef, task)
+
+			if (err != nil) {
+				// log.Printf("Task fail: %v\n", err)
+				reportAboutTaskFail(task.Id)
+				continue
+			}
+
+			reportAboutReduceTaskComplete(task.Id)
 		}
 	}	
 }
@@ -59,7 +80,7 @@ func Worker(mapf func(string, string) []KeyValue,
 // the RPC argument and reply types are defined in rpc.go.
 //
 func getReducersCount() int {
-	log.Println("Getting reducers count")
+	// log.Println("Getting reducers count")
 	
 	response := ReducersCountResponse{}
 	if !call("Master.GetReducersCount", 0, &response) {
@@ -71,7 +92,7 @@ func getReducersCount() int {
 }
 
 func tryGetTaskFromMaster() Task {
-	log.Println("Getting task")
+	// log.Println("Getting task")
 
 	task := Task{}
 	if call("Master.GetTask", 0, &task) {
@@ -84,21 +105,29 @@ func tryGetTaskFromMaster() Task {
 }
 
 func reportAboutTaskFail(id TaskId) {
-	log.Println("Reporting about task fail")
+	// log.Println("Reporting about task fail")
 	
-	reply := Reply{false}
-	if !call("Master.ReportAboutTaskFail", id, &reply) {
+	if !call("Master.ReportAboutTaskFail", id, &Reply{}) {
 		log.Println("Exit because master exit")
 		os.Exit(0)
 	}
 }
 
 func reportAboutMapTaskComplete(id TaskId, filenames map[TaskId]string) {
-	log.Println("Reporting about task complete")
+	// log.Println("Reporting about map task complete")
 
-	reply := Reply{false}
 	request := CompleteMapTaskRequest{id, filenames}
-	if !call("Master.ReportAboutMapTaskComplete", &request, &reply) {
+	if !call("Master.ReportAboutMapTaskComplete", &request, &Reply{}) {
+		log.Println("Exit because master exit")
+		os.Exit(0)
+	}
+}
+
+func reportAboutReduceTaskComplete(id TaskId) {
+	// log.Println("Reporting about reduce task complete")
+
+	request := CompleteReduceTaskRequest{id}
+	if !call("Master.ReportAboutReduceTaskComplete", &request, &Reply{}) {
 		log.Println("Exit because master exit")
 		os.Exit(0)
 	}
@@ -123,7 +152,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
 	return false
 }
 
@@ -189,4 +217,61 @@ func splitToPartsByKeyHash(
 	}
 
 	return parts
-} 
+}
+
+func execReduce(
+	reducef func(string, []string) string,
+	task Task,
+) error {
+	KVPairs := []KeyValue{}
+
+	for _, filename := range(task.Filenames) {
+		file, openErr := os.Open(filename)
+		if openErr != nil {
+			return openErr
+		}
+
+		content, readErr := ioutil.ReadAll(file)
+		if readErr != nil {
+			return readErr
+		}
+		file.Close()
+		
+		pairs := []KeyValue{}
+		deserializeErr := json.Unmarshal(content, &pairs)
+		if deserializeErr != nil {
+			return deserializeErr
+		}
+
+		KVPairs = append(KVPairs, pairs...)
+	}
+
+	sort.Sort(ByKey(KVPairs))
+
+	outputFilename := fmt.Sprintf("mr-out-%v", task.Id)
+	outputFile, createErr := os.Create(outputFilename)
+	if createErr != nil {
+		return createErr
+	}
+
+	i := 0
+	for i < len(KVPairs) {
+		j := i + 1
+		for j < len(KVPairs) && KVPairs[j].Key == KVPairs[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, KVPairs[k].Value)
+		}
+		output := reducef(KVPairs[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(outputFile, "%v %v\n", KVPairs[i].Key, output)
+
+		i = j
+	}
+
+	outputFile.Close()
+	return nil
+}

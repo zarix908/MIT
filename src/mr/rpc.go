@@ -38,9 +38,11 @@ type CompleteMapTaskRequest struct {
 	Filenames map[TaskId]string
 }
 
-type Reply struct {
-	Ok bool
+type CompleteReduceTaskRequest struct {
+	Id TaskId
 }
+
+type Reply struct {}
 
 // Add your RPC definitions here.
 
